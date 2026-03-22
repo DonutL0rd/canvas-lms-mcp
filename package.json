@@ -1,0 +1,21 @@
+{
+  "name": "canvas-lms-mcp",
+  "version": "1.0.0",
+  "description": "Read-only Canvas LMS MCP server",
+  "main": "dist/index.js",
+  "packageManager": "pnpm@latest",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}
