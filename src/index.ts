@@ -13,34 +13,62 @@ if (!CANVAS_API_TOKEN) {
   process.exit(1);
 }
 
+const PER_PAGE_DEFAULT = 50;
+const PER_PAGE_ANNOUNCEMENTS = 20;
+const FETCH_TIMEOUT_MS = 10000;
+
 async function canvasFetch(path: string): Promise<unknown> {
   const url = `${CANVAS_BASE_URL}${path}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${CANVAS_API_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-  if (!response.ok) {
-    throw new Error(
-      `Canvas API request failed: ${response.status} ${response.statusText} for ${url}`
-    );
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${CANVAS_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
   }
 
-  return response.json();
+  if (!response.ok) {
+    throw new Error(`Canvas API request failed: ${response.status} ${response.statusText}`);
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`Canvas API returned invalid JSON for path: ${path}`);
+  }
 }
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function mcpText(data: unknown) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(data),
+      },
+    ],
+  };
+}
+
+const courseIdSchema = z.string().regex(/^\d+$/, "course_id must be numeric").describe("The Canvas course ID");
+const assignmentIdSchema = z.string().regex(/^\d+$/, "assignment_id must be numeric").describe("The Canvas assignment ID");
+
 const server = new McpServer({
   name: "canvas-lms-mcp",
   version: "1.0.0",
 });
 
-// Tool 1: list_courses
 server.registerTool(
   "list_courses",
   {
@@ -49,7 +77,7 @@ server.registerTool(
   },
   async () => {
     const courses = (await canvasFetch(
-      "/courses?enrollment_state=active&per_page=50"
+      `/courses?enrollment_state=active&per_page=${PER_PAGE_DEFAULT}`
     )) as Array<{
       id: number;
       name: string;
@@ -62,30 +90,22 @@ server.registerTool(
       course_code: c.course_code,
     }));
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(result),
-        },
-      ],
-    };
+    return mcpText(result);
   }
 );
 
-// Tool 2: list_assignments
 server.registerTool(
   "list_assignments",
   {
     description:
       "List assignments for a course with id, name, due_at, points_possible, and description",
     inputSchema: {
-      course_id: z.string().describe("The Canvas course ID"),
+      course_id: courseIdSchema,
     },
   },
   async ({ course_id }) => {
     const assignments = (await canvasFetch(
-      `/courses/${course_id}/assignments?per_page=50`
+      `/courses/${course_id}/assignments?per_page=${PER_PAGE_DEFAULT}`
     )) as Array<{
       id: number;
       name: string;
@@ -102,29 +122,21 @@ server.registerTool(
       description: a.description ? stripHtml(a.description) : a.description,
     }));
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(result),
-        },
-      ],
-    };
+    return mcpText(result);
   }
 );
 
-// Tool 3: list_announcements
 server.registerTool(
   "list_announcements",
   {
     description: "List recent announcements for a course",
     inputSchema: {
-      course_id: z.string().describe("The Canvas course ID"),
+      course_id: courseIdSchema,
     },
   },
   async ({ course_id }) => {
     const announcements = (await canvasFetch(
-      `/courses/${course_id}/discussion_topics?only_announcements=true&per_page=20`
+      `/courses/${course_id}/discussion_topics?only_announcements=true&per_page=${PER_PAGE_ANNOUNCEMENTS}`
     )) as Array<{
       id: number;
       title: string;
@@ -141,24 +153,16 @@ server.registerTool(
       author: a.author?.display_name ?? null,
     }));
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(result),
-        },
-      ],
-    };
+    return mcpText(result);
   }
 );
 
-// Tool 4: get_grades
 server.registerTool(
   "get_grades",
   {
     description: "Get current grades and scores for a course",
     inputSchema: {
-      course_id: z.string().describe("The Canvas course ID"),
+      course_id: courseIdSchema,
     },
   },
   async ({ course_id }) => {
@@ -188,29 +192,21 @@ server.registerTool(
       final_score: e.grades?.final_score ?? null,
     }));
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(result),
-        },
-      ],
-    };
+    return mcpText(result);
   }
 );
 
-// Tool 5: list_files
 server.registerTool(
   "list_files",
   {
     description: "List course files with name, url, and content-type",
     inputSchema: {
-      course_id: z.string().describe("The Canvas course ID"),
+      course_id: courseIdSchema,
     },
   },
   async ({ course_id }) => {
     const files = (await canvasFetch(
-      `/courses/${course_id}/files?per_page=50`
+      `/courses/${course_id}/files?per_page=${PER_PAGE_DEFAULT}`
     )) as Array<{
       id: number;
       display_name: string;
@@ -231,25 +227,17 @@ server.registerTool(
       updated_at: f.updated_at,
     }));
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(result),
-        },
-      ],
-    };
+    return mcpText(result);
   }
 );
 
-// Tool 6: get_assignment_details
 server.registerTool(
   "get_assignment_details",
   {
     description: "Get full details and rubric for a specific assignment",
     inputSchema: {
-      course_id: z.string().describe("The Canvas course ID"),
-      assignment_id: z.string().describe("The Canvas assignment ID"),
+      course_id: courseIdSchema,
+      assignment_id: assignmentIdSchema,
     },
   },
   async ({ course_id, assignment_id }) => {
@@ -305,14 +293,7 @@ server.registerTool(
       rubric_settings: assignment.rubric_settings ?? null,
     };
 
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify(result),
-        },
-      ],
-    };
+    return mcpText(result);
   }
 );
 
